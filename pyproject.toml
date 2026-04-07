@@ -6,13 +6,18 @@ build-backend = "setuptools.build-meta"
 name = "clinical-triage-env"
 version = "1.1.0"
 description = "OpenEnv-compatible ICU triage environment."
+requires-python = ">=3.10"
 dependencies = [
     "fastapi==0.111.0",
     "uvicorn==0.29.0",
     "pydantic==2.7.0",
     "openai==1.30.0",
     "requests==2.31.0",
+    "openenv-core>=0.2.0", 
 ]
 
+[project.scripts]
+clinical-triage-server = "server.app:main"
+
 [tool.setuptools]
-py-modules = ["app", "environment", "models", "patients"]
+packages = ["clinical_triage", "server"]
