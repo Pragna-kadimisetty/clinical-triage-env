@@ -7,14 +7,14 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Dict
 
 from models import TriageAction, ClinicalObservation, ClinicalState
 from environment import ClinicalTriageEnvironment
 
 app = FastAPI(
     title="ClinicalTriageEnv",
-    description="OpenEnv-compatible ICU triage environment. Agents allocate scarce hospital resources to patients with varying severity under uncertainty.",
+    description="OpenEnv-compatible ICU triage environment.",
     version="1.1.0",
 )
 
@@ -29,45 +29,47 @@ app.add_middleware(
 # Global environment instance
 _env: Optional[ClinicalTriageEnvironment] = None
 
-
 class ResetRequest(BaseModel):
-    task_id: str = "task1"
-    seed: int = 42
+    task_id: Optional[str] = "task1"
+    seed: Optional[int] = 42
 
-
-class StepResponse(BaseModel):
-    """Standard OpenEnv step response structure."""
+class StepResult(BaseModel):
+    """Standard OpenEnv step response structure required by validator."""
     observation: ClinicalObservation
     reward: float
     done: bool
-    info: dict = {}
-
+    info: Dict = {}
 
 @app.get("/")
 def root():
     return {
         "status": "ok",
-        "env": "ClinicalTriageEnv",
+        "env": "clinical-triage-env",
         "version": "1.1.0",
         "tasks": ["task1", "task2", "task3"],
         "interface": "OpenEnv-Compliant"
     }
 
-
-# REQUIRED UPDATE: Made 'req' optional to pass OpenEnv Reset validator
-@app.post("/reset", response_model=ClinicalObservation)
+@app.post("/reset", response_model=StepResult)
 def reset(req: Optional[ResetRequest] = None):
     global _env
     
-    # Extract task_id and seed with defaults if request body is missing or empty
-    task_id = getattr(req, "task_id", "task1") if req else "task1"
-    seed = getattr(req, "seed", 42) if req else 42
+    # Extract values safely to prevent 422 errors
+    t_id = getattr(req, "task_id", "task1") if req else "task1"
+    s = getattr(req, "seed", 42) if req else 42
     
-    _env = ClinicalTriageEnvironment(task_id=task_id, seed=seed)
-    return _env.reset()
+    _env = ClinicalTriageEnvironment(task_id=t_id, seed=s)
+    obs = _env.reset()
+    
+    # OpenEnv Validate often expects a StepResult structure even for reset
+    return StepResult(
+        observation=obs,
+        reward=0.0,
+        done=False,
+        info={}
+    )
 
-
-@app.post("/step", response_model=StepResponse)
+@app.post("/step", response_model=StepResult)
 def step(action: TriageAction):
     global _env
     if _env is None:
@@ -75,13 +77,12 @@ def step(action: TriageAction):
     
     obs, reward, done, info = _env.step(action)
     
-    return StepResponse(
+    return StepResult(
         observation=obs,
-        reward=reward,
-        done=done,
+        reward=float(reward),
+        done=bool(done),
         info=info
     )
-
 
 @app.get("/state", response_model=ClinicalState)
 def state():
@@ -90,41 +91,15 @@ def state():
         raise HTTPException(status_code=400, detail="Environment not initialized. Call /reset first.")
     return _env.state
 
-
 @app.get("/tasks")
 def list_tasks():
     return {
         "tasks": [
-            {
-                "id": "task1",
-                "name": "Single-Resource Triage",
-                "difficulty": "easy",
-                "description": "Triage 6 patients with severity hints shown. Adequate resources available.",
-                "patients": 6,
-                "severity_hints_visible": True,
-                "resource_pressure": "low",
-            },
-            {
-                "id": "task2",
-                "name": "Multi-Resource Triage Under Pressure",
-                "difficulty": "medium",
-                "description": "Triage 9 patients. No severity hints. Moderate resource scarcity. Deceptive cases included.",
-                "patients": 9,
-                "severity_hints_visible": False,
-                "resource_pressure": "medium",
-            },
-            {
-                "id": "task3",
-                "name": "Mass Casualty Surge",
-                "difficulty": "hard",
-                "description": "Triage 12 patients during surge. No hints. All ICU beds full. Ventilators exhausted. Ethical trade-offs required. Rationale graded.",
-                "patients": 12,
-                "severity_hints_visible": False,
-                "resource_pressure": "critical",
-            },
+            {"id": "task1", "name": "Single-Resource Triage", "difficulty": "easy"},
+            {"id": "task2", "name": "Multi-Resource Triage", "difficulty": "medium"},
+            {"id": "task3", "name": "Mass Casualty Surge", "difficulty": "hard"}
         ]
     }
-
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=7860)
