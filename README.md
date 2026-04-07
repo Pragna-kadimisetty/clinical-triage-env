@@ -204,6 +204,14 @@ clinical_triage_env/
 
 ---
 
+## 🎯 Use Cases
+
+- Training RL agents for healthcare decision-making  
+- Benchmarking LLM reasoning under uncertainty  
+- Studying ethical AI in resource-constrained environments  
+
+---
+
 ## 📌 Final Note
 
 Built for researchers and engineers working on **high-stakes AI decision systems**, where correctness, ethics, and resource constraints intersect.
