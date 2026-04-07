@@ -1,29 +1,21 @@
-"""
-inference.py — Baseline inference for ClinicalTriageEnv.
-Uses OpenAI-compatible client. Runs all 3 tasks end-to-end.
-
-Required env vars:
-  API_BASE_URL  — LLM API endpoint
-  MODEL_NAME    — Model identifier
-  HF_TOKEN      — API key (Mandatory)
-
-Optional:
-  ENV_URL       — Environment server URL (default: http://localhost:7860)
-"""
-
 import os
 import json
 import requests
 from openai import OpenAI
 
-# 1. UPDATED: Environment Variables as per Hackathon Requirements
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
-HF_TOKEN = os.environ.get("HF_TOKEN", "") # Use HF_TOKEN as per rules
-ENV_URL = os.environ.get("ENV_URL", "http://localhost:7860")
+# 1. Environment Variables - STRICTLY FOLLOWING IMAGE REQUIREMENTS
+# Defaults are set ONLY for API_BASE_URL and MODEL_NAME
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
+# HF_TOKEN has no default as per "(not HF_TOKEN)" instruction
+HF_TOKEN = os.getenv("HF_TOKEN")
+# Optional as per image
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
+# Benchmarking URL
+ENV_URL = os.getenv("ENV_URL", "http://localhost:7860")
 
 if not HF_TOKEN:
-    raise ValueError("HF_TOKEN environment variable is required")
+    raise ValueError("HF_TOKEN environment variable is required and cannot have a default.")
 
 client = OpenAI(api_key=HF_TOKEN, base_url=API_BASE_URL)
 
@@ -126,16 +118,18 @@ def format_patient_prompt(obs: dict, task_id: str) -> str:
     return "\n".join(lines)
 
 def run_task(task_id: str):
-    # 2. UPDATED: Start Log
-    print(f"[START] task={task_id} env=clinical-triage-env model={MODEL_NAME}")
+    print(f"[START] task={task_id} env=clinical-triage-env model={MODEL_NAME}", flush=True)
+
+    rewards_list = []
+    step_count = 0
+    score = 0.0
+    success = False
 
     try:
         resp = requests.post(f"{ENV_URL}/reset", json={"task_id": task_id, "seed": 42})
         resp.raise_for_status()
         obs = resp.json()
 
-        rewards_list = []
-        step_count = 0
         messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
         while not obs.get("done", False):
@@ -159,19 +153,22 @@ def run_task(task_id: str):
             
             rewards_list.append(reward)
 
-            # 3. UPDATED: Step Log (Lowercase booleans, 2 decimal rewards)
             reward_val = f"{reward:.2f}"
             done_val = str(done).lower() 
-            print(f"[STEP] step={step_count} action={action['decision']} reward={reward_val} done={done_val} error=null")
+            print(f"[STEP] step={step_count} action={action['decision']} reward={reward_val} done={done_val} error=null", flush=True)
 
-        # 4. UPDATED: End Log
-        success_val = "true" if (sum(rewards_list)/max(len(rewards_list), 1)) > 0.6 else "false"
-        rewards_str = ",".join([f"{r:.2f}" for r in rewards_list])
-        print(f"[END] success={success_val} steps={step_count} rewards={rewards_str}")
+        score = sum(rewards_list) / max(len(rewards_list), 1)
+        score = min(max(score, 0.0), 1.0)
+        success = score > 0.6
 
     except Exception as e:
-        # Fallback end log if something crashes
-        print(f"[END] success=false steps=0 rewards=0.00 error={str(e)}")
+        error_msg = str(e).replace("\n", " ")
+        print(f"[DEBUG] Task failed: {error_msg}", flush=True)
+    
+    finally:
+        success_val = str(success).lower()
+        rewards_str = ",".join([f"{r:.2f}" for r in rewards_list]) if rewards_list else "0.00"
+        print(f"[END] success={success_val} steps={step_count} score={score:.2f} rewards={rewards_str}", flush=True)
 
 def main():
     for task in ["task1", "task2", "task3"]:
