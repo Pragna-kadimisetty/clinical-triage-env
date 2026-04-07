@@ -1,4 +1,5 @@
 # 🏥 ClinicalTriageEnv
+
 **An OpenEnv-Compatible Framework for ICU Resource Allocation Under Uncertainty**
 
 [![Environment: OpenEnv](https://img.shields.io/badge/Environment-OpenEnv-blue.svg)](https://github.com/openenv/spec)
@@ -8,18 +9,39 @@
 ---
 
 ## 📌 Overview
-`ClinicalTriageEnv` is a high-fidelity simulation environment designed to train and evaluate AI agents in medical crisis management. Agents act as emergency physicians tasked with triaging incoming patients and managing finite resources (ICU beds, ventilators, and ward beds) during both routine operations and mass casualty surges.
 
-### The Problem
-During medical crises, hospital resource allocation failures cost lives. Existing AI environments often overlook:
-* **Partial Observability**: Real patient severity is often hidden or deceptive.
-* **Ethical Trade-offs**: The necessity of choosing between aggressive intervention and palliative care.
-* **Multi-Dimensional Success**: Balancing patient survival with resource efficiency and equity.
+`ClinicalTriageEnv` is a high-fidelity simulation environment designed to train and evaluate AI agents in **medical crisis decision-making**.
+
+Agents operate as emergency physicians responsible for:
+
+* Triaging incoming patients
+* Allocating scarce hospital resources (ICU beds, ventilators, ward beds)
+* Making ethically constrained decisions under uncertainty
+
+The environment simulates both **routine hospital flow** and **mass casualty scenarios**, emphasizing real-world complexity.
+
+---
+
+## ⚠️ The Problem
+
+During healthcare crises, poor resource allocation directly impacts survival outcomes. Most existing AI environments fail to model:
+
+* **Partial Observability**
+  True patient severity is often hidden or misleading
+
+* **Ethical Trade-offs**
+  Balancing aggressive intervention vs. palliative care
+
+* **Multi-Dimensional Objectives**
+  Survival, efficiency, fairness, and timeliness must all be optimized
+
+This environment addresses these gaps with a clinically grounded simulation.
 
 ---
 
 ## 🏗️ Architecture
-The system is built on a modular FastAPI backbone, allowing for seamless interaction between the LLM agent and the simulation engine.
+
+The system is modular and API-driven, built on a FastAPI backbone:
 
 ```text
        [ LLM Agent ] 
@@ -30,15 +52,129 @@ The system is built on a modular FastAPI backbone, allowing for seamless interac
             │ (app.py)
             ▼
  [ ClinicalTriageEnvironment ] (environment.py)
-      ├── Patient Generator  — Stochastic arrivals & clinical histories
-      ├── Resource Tracker   — Real-time ICU/Ward/Ventilator state
-      └── Reward Engine      — 5-dimensional clinical scoring
-⚙️ Action & Observation SpaceAction SpaceAgents must submit a structured JSON response for every patient:Decision: admit_icu, admit_ward, or discharge.Rationale: A detailed clinical justification (graded in high-difficulty tasks).Resource Allocation: Optional explicit assignments of ventilators or specialists.Observation SpaceThe environment provides a rich clinical picture at each step:Vitals: Heart Rate, Blood Pressure, SpO2, Respiratory Rate, GCS, Temperature, and Lactate.Clinical Context: Age, chief complaint, medical history, and deterioration flags.Global State: Remaining hospital capacity and current queue length.📊 Evaluation & Baseline ScoresWe evaluated the Llama-3.3-70B-Versatile model across three increasing difficulty levels.TaskDifficultyStrategy RequiredVerified ScoreTask 1EasyBasic triage with severity hints.0.475Task 2MediumReasoning from vitals alone (no hints).0.317Task 3HardMass casualty surge; zero ICU capacity.0.211AverageTotalConsolidated Performance0.334Judge's Note: Task 3 scores are naturally lower due to "forced-fail" scenarios where resources are mathematically exhausted, testing the agent's ability to prioritize the most salvageable patients under extreme pressure.🩺 Reward Function LogicThe environment utilizes a Dense Reward Engine to ensure clinical accuracy:Survival Reward (0.50): Does the decision match the patient's actual medical necessity?Resource Efficiency (0.25): Prevents ICU "over-triaging" of stable patients.Delay Penalty (-0.10): Penalizes allowing critical patients to wait too long.Rationale Bonus (0.10): LLM-graded clinical coherence in Task 3.🚀 Setup & Execution1. Cloud Deployment (Hugging Face)The environment is containerized via Docker for immediate deployment:Bashdocker build -t clinical-triage-env .
+      ├── Patient Generator  — stochastic arrivals & histories
+      ├── Resource Tracker   — ICU / ward / ventilator state
+      └── Reward Engine      — multi-dimensional scoring
+```
+
+---
+
+## ⚙️ Action Space
+
+Agents must return structured JSON decisions per patient:
+
+| Field                   | Description                                                   |
+| ----------------------- | ------------------------------------------------------------- |
+| **Decision**            | `admit_icu`, `admit_ward`, `discharge`, `palliative`, `defer` |
+| **Rationale**           | Clinical reasoning (graded in high-difficulty tasks)          |
+| **Resource Allocation** | Optional explicit assignment of resources                     |
+
+---
+
+## 🔍 Observation Space
+
+Each timestep provides a comprehensive clinical snapshot:
+
+### Patient Data
+
+* Vitals: HR, BP, SpO2, RR, GCS, Temperature, Lactate
+* Demographics: age, complaint, medical history
+* Flags: deterioration indicators
+
+### System State
+
+* ICU / ward / ventilator capacity
+* Queue length and episode progress
+
+👉 **Partial observability**: severity signals are hidden in harder tasks.
+
+---
+
+## 📊 Evaluation & Baselines
+
+Performance evaluated using the **Llama-3.3-70B-Versatile** model:
+
+| Task        | Difficulty | Strategy Required           | Score     |
+| ----------- | ---------- | --------------------------- | --------- |
+| Task 1      | Easy       | Severity-guided triage      | 0.475     |
+| Task 2      | Medium     | Reasoning from vitals       | 0.317     |
+| Task 3      | Hard       | Resource-constrained triage | 0.211     |
+| **Average** | —          | —                           | **0.334** |
+
+**Note:** Task 3 includes *forced-failure scenarios* where resources are exhausted, testing prioritization under extreme scarcity.
+
+---
+
+## 🩺 Reward Function
+
+The environment uses a **dense, multi-objective reward system**:
+
+* **Survival Reward (0.50)** → clinical correctness
+* **Resource Efficiency (0.25)** → optimal allocation
+* **Delay Penalty (-0.10)** → penalizes late intervention
+* **Rationale Bonus (0.10)** → evaluates reasoning quality
+
+This prevents trivial or exploitative policies.
+
+---
+
+## 🚀 Setup & Execution
+
+### 1. Docker Deployment (Recommended)
+
+```bash
+docker build -t clinical-triage-env .
 docker run -p 7860:7860 clinical-triage-env
-2. Local InferenceTo reproduce the baseline results using the Groq API, set your environment variables and run the inference script:PowerShell:PowerShell$env:API_BASE_URL="[https://api.groq.com/openai/v1](https://api.groq.com/openai/v1)"
+```
+
+---
+
+### 2. Local Inference
+
+Set environment variables:
+
+```powershell
+$env:API_BASE_URL="https://api.groq.com/openai/v1"
 $env:MODEL_NAME="llama-3.3-70b-versatile"
 $env:HF_TOKEN="your_groq_api_key"
-$env:ENV_URL="[https://indhu-kadimisetty123-clinical-triage-env.hf.space](https://indhu-kadimisetty123-clinical-triage-env.hf.space)"
+$env:ENV_URL="https://indhu-kadimisetty123-clinical-triage-env.hf.space"
 
 python inference.py
-📂 Project Structureapp.py: FastAPI server handling environment state and API endpoints.environment.py: Core logic for triage, rewards, and patient state transitions.patients.py: Database and generator for stochastic patient clinical profiles.inference.py: LLM Agent implementation utilizing the Llama-3.3 model.models.py: Pydantic schemas for strict data validation and Action Space enforcement.requirements.txt: Python dependencies (FastAPI, OpenAI, Pydantic).
+```
+
+---
+
+## 📂 Project Structure
+
+```text
+clinical_triage_env/
+├── app.py            # FastAPI server
+├── environment.py    # Core simulation logic
+├── patients.py       # Patient generator
+├── inference.py      # LLM agent
+├── models.py         # Pydantic schemas
+├── requirements.txt  # Dependencies
+```
+
+---
+
+## ✨ Key Contributions
+
+* **Realistic clinical decision modeling** under uncertainty
+* **Ethics-aware triage simulation**
+* **Partial observability by design**
+* **Multi-objective reward system**
+* **Reproducible + stochastic environment**
+
+---
+
+## 📎 Links
+
+* 🔗 Hugging Face Space:
+  https://huggingface.co/spaces/indhu-kadimisetty123/clinical-triage-env
+
+---
+
+## 📌 Final Note
+
+This environment is designed for **researchers and engineers building high-stakes decision-making agents**, particularly in domains where uncertainty, ethics, and resource constraints intersect.
