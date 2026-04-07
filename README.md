@@ -8,40 +8,33 @@
 
 ---
 
-## 📌 Overview
+## 📌 Executive Summary
 
-`ClinicalTriageEnv` is a high-fidelity simulation environment designed to train and evaluate AI agents in **medical crisis decision-making**.
+`ClinicalTriageEnv` is a high-fidelity simulation designed to evaluate AI agents in **high-stakes medical decision-making**.
 
-Agents operate as emergency physicians responsible for:
+Unlike standard benchmarks, this environment forces agents to manage:
 
-* Triaging incoming patients
-* Allocating scarce hospital resources (ICU beds, ventilators, ward beds)
-* Making ethically constrained decisions under uncertainty
-
-The environment simulates both **routine hospital flow** and **mass casualty scenarios**, emphasizing real-world complexity.
+* **Finite resources** (ICU beds, ventilators)
+* **Partial observability**
+* **Ethical scarcity**
 
 ---
 
-## ⚠️ The Problem
+## ⚠️ The Core Challenge
 
-During healthcare crises, poor resource allocation directly impacts survival outcomes. Most existing AI environments fail to model:
+In a crisis, correct diagnosis is not enough.
 
-* **Partial Observability**
-  True patient severity is often hidden or misleading
+> *If only one ICU bed is available and two critical patients arrive — who survives?*
 
-* **Ethical Trade-offs**
-  Balancing aggressive intervention vs. palliative care
+This environment evaluates an agent’s ability to:
 
-* **Multi-Dimensional Objectives**
-  Survival, efficiency, fairness, and timeliness must all be optimized
-
-This environment addresses these gaps with a clinically grounded simulation.
+* Prioritize
+* Justify
+* Allocate under pressure
 
 ---
 
-## 🏗️ Architecture
-
-The system is modular and API-driven, built on a FastAPI backbone:
+## 🏗️ System Architecture
 
 ```text
        [ LLM Agent ] 
@@ -59,68 +52,106 @@ The system is modular and API-driven, built on a FastAPI backbone:
 
 ---
 
+## 🎮 Task Specifications
+
+### Task 1 — Baseline Triage (Easy)
+
+* 6 patients
+* Severity hints available
+* Resources abundant
+* Goal: learn vitals → action mapping
+
+---
+
+### Task 2 — Multi-Resource Pressure (Medium)
+
+* 9 patients
+* No severity hints
+* Moderate scarcity
+
+Includes **deceptive cases** (e.g. anxiety mimicking critical distress)
+
+Goal: reasoning from vitals alone
+
+---
+
+### Task 3 — Mass Casualty Surge (Hard)
+
+* 12 patients
+* No hints
+* ICU + ventilators exhausted
+
+Forces:
+
+* Ethical triage
+* Palliative decisions
+* Justified prioritization
+
+---
+
+## 📊 Performance Benchmarks
+
+| Task        | Difficulty | Strategy           | Score     |
+| ----------- | ---------- | ------------------ | --------- |
+| Task 1      | Easy       | Guided triage      | 0.475     |
+| Task 2      | Medium     | Vitals reasoning   | 0.317     |
+| Task 3      | Hard       | Ethical allocation | 0.211     |
+| **Average** | —          | —                  | **0.334** |
+
+**Note:** Task 3 includes forced-failure scenarios to test prioritization.
+
+---
+
 ## ⚙️ Action Space
 
-Agents must return structured JSON decisions per patient:
+Agents output structured JSON:
 
-| Field                   | Description                                                   |
-| ----------------------- | ------------------------------------------------------------- |
-| **Decision**            | `admit_icu`, `admit_ward`, `discharge`, `palliative`, `defer` |
-| **Rationale**           | Clinical reasoning (graded in high-difficulty tasks)          |
-| **Resource Allocation** | Optional explicit assignment of resources                     |
+* **Decision**:
+  `admit_icu`, `admit_ward`, `discharge`, `palliative`, `defer`
+
+* **Rationale**:
+  Clinical reasoning (graded in Task 3)
+
+* **Resource Allocation**:
+  Optional explicit assignments
 
 ---
 
 ## 🔍 Observation Space
 
-Each timestep provides a comprehensive clinical snapshot:
+Each step provides:
 
-### Patient Data
+### Patient
 
-* Vitals: HR, BP, SpO2, RR, GCS, Temperature, Lactate
-* Demographics: age, complaint, medical history
-* Flags: deterioration indicators
+* Vitals: HR, BP, SpO2, RR, GCS, Temp, Lactate
+* Age, complaint, history
+* Deterioration flags
 
-### System State
+### System
 
 * ICU / ward / ventilator capacity
-* Queue length and episode progress
+* Queue length
 
-👉 **Partial observability**: severity signals are hidden in harder tasks.
-
----
-
-## 📊 Evaluation & Baselines
-
-Performance evaluated using the **Llama-3.3-70B-Versatile** model:
-
-| Task        | Difficulty | Strategy Required           | Score     |
-| ----------- | ---------- | --------------------------- | --------- |
-| Task 1      | Easy       | Severity-guided triage      | 0.475     |
-| Task 2      | Medium     | Reasoning from vitals       | 0.317     |
-| Task 3      | Hard       | Resource-constrained triage | 0.211     |
-| **Average** | —          | —                           | **0.334** |
-
-**Note:** Task 3 includes *forced-failure scenarios* where resources are exhausted, testing prioritization under extreme scarcity.
+👉 Severity is hidden in harder tasks (partial observability)
 
 ---
 
 ## 🩺 Reward Function
 
-The environment uses a **dense, multi-objective reward system**:
+Dense multi-objective scoring:
 
-* **Survival Reward (0.50)** → clinical correctness
-* **Resource Efficiency (0.25)** → optimal allocation
-* **Delay Penalty (-0.10)** → penalizes late intervention
-* **Rationale Bonus (0.10)** → evaluates reasoning quality
+* **Survival Reward (0.50)**
+* **Resource Efficiency (0.25)**
+* **Delay Penalty (-0.10)**
+* **Rationale Bonus (0.10)**
 
-This prevents trivial or exploitative policies.
+Designed to prevent trivial or exploitable policies.
 
 ---
 
 ## 🚀 Setup & Execution
 
-### 1. Docker Deployment (Recommended)
+### Docker
 
 ```bash
 docker build -t clinical-triage-env .
@@ -129,15 +160,13 @@ docker run -p 7860:7860 clinical-triage-env
 
 ---
 
-### 2. Local Inference
-
-Set environment variables:
+### Local Inference (Groq)
 
 ```powershell
 $env:API_BASE_URL="https://api.groq.com/openai/v1"
 $env:MODEL_NAME="llama-3.3-70b-versatile"
 $env:HF_TOKEN="your_groq_api_key"
-$env:ENV_URL="https://indhu-kadimisetty123-clinical-triage-env.hf.space"
+$env:ENV_URL="https://your-huggingface-space-url"
 
 python inference.py
 ```
@@ -148,33 +177,35 @@ python inference.py
 
 ```text
 clinical_triage_env/
-├── app.py            # FastAPI server
-├── environment.py    # Core simulation logic
-├── patients.py       # Patient generator
-├── inference.py      # LLM agent
-├── models.py         # Pydantic schemas
-├── requirements.txt  # Dependencies
+├── app.py
+├── environment.py
+├── patients.py
+├── inference.py
+├── models.py
+├── requirements.txt
 ```
 
 ---
 
 ## ✨ Key Contributions
 
-* **Realistic clinical decision modeling** under uncertainty
-* **Ethics-aware triage simulation**
-* **Partial observability by design**
-* **Multi-objective reward system**
-* **Reproducible + stochastic environment**
+* Partial observability by design
+* Ethical decision modeling
+* Resource-constrained reasoning
+* Multi-objective reward system
+* Reproducible + stochastic environment
 
 ---
 
 ## 📎 Links
 
-* 🔗 Hugging Face Space:
+* Hugging Face Space:
   https://huggingface.co/spaces/indhu-kadimisetty123/clinical-triage-env
 
 ---
 
 ## 📌 Final Note
 
-This environment is designed for **researchers and engineers building high-stakes decision-making agents**, particularly in domains where uncertainty, ethics, and resource constraints intersect.
+Built for researchers and engineers working on **high-stakes AI decision systems**, where correctness, ethics, and resource constraints intersect.
+
+---
