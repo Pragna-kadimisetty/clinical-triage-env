@@ -22,6 +22,11 @@ from models import (
 )
 from patients import generate_patient_queue, get_initial_resources
 
+# Helper class to carry feedback during reward calculation
+class RewardResult:
+    def __init__(self, breakdown: RewardBreakdown, feedback: str):
+        self.breakdown = breakdown
+        self.feedback = feedback
 
 class ClinicalTriageEnvironment:
     VALID_TASKS = ["task1", "task2", "task3"]
@@ -34,7 +39,7 @@ class ClinicalTriageEnvironment:
         self._reset_internal()
 
     # ------------------------------------------------------------------ #
-    # OpenEnv API                                                          #
+    # OpenEnv API                                                        #
     # ------------------------------------------------------------------ #
 
     def reset(self) -> ClinicalObservation:
@@ -45,6 +50,9 @@ class ClinicalTriageEnvironment:
         )
 
     def step(self, action: TriageAction) -> Tuple[ClinicalObservation, float, bool, dict]:
+        """
+        OpenEnv Standard: Returns (observation, reward, done, info)
+        """
         if self._done:
             obs = self._make_observation(feedback="Episode already complete.", last_reward=0.0)
             return obs, 0.0, True, {}
@@ -59,20 +67,19 @@ class ClinicalTriageEnvironment:
         # Validate action targets current patient
         if action.patient_id != patient_raw["patient_id"]:
             reward = -0.15
-            feedback = f"Wrong patient_id. Expected {patient_raw['patient_id']}, got {action.patient_id}. Penalty applied."
+            feedback = f"Wrong patient_id. Expected {patient_raw['patient_id']}, got {action.patient_id}."
             self._step_count += 1
             self._current_idx += 1
             self._cumulative_reward += reward
+            self._done = self._current_idx >= len(self._queue)
             obs = self._make_observation(feedback=feedback, last_reward=reward)
-            done = self._current_idx >= len(self._queue)
-            self._done = done
-            return obs, reward, done, {"breakdown": RewardBreakdown(invalid_action_penalty=reward, total=reward).model_dump()}
+            return obs, reward, self._done, {"error": "invalid_patient_id"}
 
-        # Compute reward
-        breakdown = self._compute_reward(action, patient_raw)
-        reward = breakdown.total
+        # Compute reward using the helper class
+        reward_result = self._compute_reward(action, patient_raw)
+        reward = reward_result.breakdown.total
 
-        # Update resource state
+        # Update resource state and outcomes
         self._apply_action_to_resources(action, patient_raw)
         self._update_outcome_counters(action, patient_raw)
 
@@ -81,17 +88,18 @@ class ClinicalTriageEnvironment:
         self._cumulative_reward += reward
         self._last_actions.append((patient_raw["patient_id"], action.decision))
 
-        done = self._current_idx >= len(self._queue)
-        self._done = done
+        self._done = self._current_idx >= len(self._queue)
 
-        if done:
-            end_note = f" | EPISODE COMPLETE. Total reward: {self._cumulative_reward:.3f}. Survived: {self._survived}, Deceased: {self._deceased}."
-            feedback = breakdown._feedback + end_note
-        else:
-            feedback = breakdown._feedback
+        feedback = reward_result.feedback
+        if self._done:
+            feedback += f" | EPISODE COMPLETE. Total reward: {self._cumulative_reward:.3f}."
 
         obs = self._make_observation(feedback=feedback, last_reward=reward)
-        return obs, reward, done, {"breakdown": breakdown.model_dump()}
+        
+        # Info dictionary contains the detailed reward breakdown per OpenEnv specs
+        info = {"breakdown": reward_result.breakdown.model_dump()}
+        
+        return obs, reward, self._done, info
 
     @property
     def state(self) -> ClinicalState:
@@ -110,10 +118,10 @@ class ClinicalTriageEnvironment:
         )
 
     # ------------------------------------------------------------------ #
-    # Reward Engine                                                        #
+    # Reward Engine                                                      #
     # ------------------------------------------------------------------ #
 
-    def _compute_reward(self, action: TriageAction, patient: dict) -> "RewardBreakdownWithFeedback":
+    def _compute_reward(self, action: TriageAction, patient: dict) -> RewardResult:
         severity = patient["_true_severity"]
         needs_icu = patient["_needs_icu"]
         needs_vent = patient["_needs_vent"]
@@ -122,36 +130,19 @@ class ClinicalTriageEnvironment:
         resources = self._get_resource_state()
         notes = []
 
-        # ---- 1. Survival reward (0.0 - 0.50) ----
-        # Core: does the decision match what the patient medically needs?
         survival = self._survival_reward(decision, severity, needs_icu, needs_vent, is_palliative, resources, notes)
-
-        # ---- 2. Resource efficiency (0.0 - 0.25) ----
-        # Penalizes wasting ICU on mild patients, or discharging critical ones
         efficiency = self._efficiency_reward(decision, severity, needs_icu, resources, notes)
-
-        # ---- 3. Equity penalty (-0.15 - 0.0) ----
-        # Penalizes pattern of repeatedly deferring vulnerable groups
         equity = self._equity_penalty(patient, notes)
-
-        # ---- 4. Delay penalty (-0.10 - 0.0) ----
-        # Penalizes DEFER when patient is critically ill and deteriorating
         delay = self._delay_penalty(decision, patient, notes)
 
-        # ---- 5. Rationale quality bonus (0.0 - 0.10) — task3 only ----
         rationale_bonus = 0.0
         if self.task_id == "task3" and action.rationale:
             rationale_bonus = self._rationale_quality(action.rationale, patient)
             notes.append(f"Rationale quality: +{rationale_bonus:.2f}")
 
-        total = round(
-            min(1.0, max(-0.3,
-                survival + efficiency + equity + delay + rationale_bonus
-            )), 3
-        )
-        feedback = " | ".join(notes)
-
-        rb = RewardBreakdown(
+        total = round(min(1.0, max(-0.3, survival + efficiency + equity + delay + rationale_bonus)), 3)
+        
+        breakdown = RewardBreakdown(
             survival_reward=survival,
             resource_efficiency=efficiency,
             equity_penalty=equity,
@@ -159,13 +150,10 @@ class ClinicalTriageEnvironment:
             rationale_bonus=rationale_bonus,
             total=total,
         )
-        rb._feedback = feedback
-        return rb
+        return RewardResult(breakdown=breakdown, feedback=" | ".join(notes))
 
     def _survival_reward(self, decision, severity, needs_icu, needs_vent, is_palliative, resources, notes):
         res = resources
-
-        # Palliative: ICU admission is the WRONG call — penalize it
         if is_palliative:
             if decision == TriageDecision.PALLIATIVE:
                 notes.append("✓ Correct palliative decision (+0.50)")
@@ -173,20 +161,15 @@ class ClinicalTriageEnvironment:
             elif decision in (TriageDecision.ADMIT_ICU,):
                 notes.append("✗ ICU for palliative patient: harmful (-0.10)")
                 return -0.10
-            else:
-                notes.append("~ Suboptimal but acceptable (0.20)")
-                return 0.20
+            return 0.20
 
-        # Critical patients (severity > 0.8)
         if severity > 0.80:
             if decision == TriageDecision.ADMIT_ICU:
-                # Check resource availability
                 if res.icu_beds_used < res.icu_beds_total:
                     notes.append("✓ Correct ICU admission for critical patient (+0.50)")
                     return 0.50
-                else:
-                    notes.append("~ ICU correct but unavailable, stabilize acceptable (+0.25)")
-                    return 0.25
+                notes.append("~ ICU correct but unavailable, stabilize acceptable (+0.25)")
+                return 0.25
             elif decision == TriageDecision.STABILIZE:
                 notes.append("~ Stabilize acceptable when ICU full (+0.25)")
                 return 0.25
@@ -196,83 +179,34 @@ class ClinicalTriageEnvironment:
             elif decision in (TriageDecision.DISCHARGE, TriageDecision.PALLIATIVE):
                 notes.append("✗ Critical patient discharged — fatal error (-0.25)")
                 return -0.25
-            else:
-                notes.append("~ Deferred critical patient (-0.05)")
-                return -0.05
-
-        # Serious patients (severity 0.5 - 0.8)
+            return -0.05
         elif severity > 0.50:
-            if decision == TriageDecision.ADMIT_ICU:
-                notes.append("✓ ICU for serious patient (+0.40)")
-                return 0.40
-            elif decision == TriageDecision.ADMIT_WARD:
-                notes.append("✓ Ward for serious patient — acceptable (+0.35)")
-                return 0.35
-            elif decision == TriageDecision.STABILIZE:
-                notes.append("~ Stabilize and reassess — partial (+0.20)")
-                return 0.20
-            else:
-                notes.append("✗ Discharge/defer for serious patient (-0.05)")
-                return -0.05
-
-        # Moderate patients (severity 0.3 - 0.5)
+            if decision == TriageDecision.ADMIT_ICU: return 0.40
+            if decision == TriageDecision.ADMIT_WARD: return 0.35
+            return 0.20 if decision == TriageDecision.STABILIZE else -0.05
         elif severity > 0.30:
-            if decision == TriageDecision.ADMIT_WARD:
-                notes.append("✓ Ward appropriate for moderate patient (+0.40)")
-                return 0.40
-            elif decision == TriageDecision.ADMIT_ICU:
-                notes.append("~ ICU over-allocated for moderate patient (+0.15)")
-                return 0.15
-            elif decision == TriageDecision.DISCHARGE:
-                notes.append("~ Early discharge — possible but risky (+0.10)")
-                return 0.10
-            else:
-                notes.append("~ Acceptable moderate decision (+0.20)")
-                return 0.20
-
-        # Mild patients (severity < 0.3)
+            if decision == TriageDecision.ADMIT_WARD: return 0.40
+            if decision == TriageDecision.ADMIT_ICU: return 0.15
+            return 0.10 if decision == TriageDecision.DISCHARGE else 0.20
         else:
-            if decision == TriageDecision.DISCHARGE:
-                notes.append("✓ Correct discharge for mild patient (+0.45)")
-                return 0.45
-            elif decision == TriageDecision.ADMIT_WARD:
-                notes.append("~ Ward for mild: over-cautious but safe (+0.20)")
-                return 0.20
-            elif decision == TriageDecision.ADMIT_ICU:
-                notes.append("✗ ICU for mild patient: resource waste (-0.10)")
-                return -0.10
-            else:
-                notes.append("~ Acceptable mild decision (+0.15)")
-                return 0.15
+            if decision == TriageDecision.DISCHARGE: return 0.45
+            if decision == TriageDecision.ADMIT_WARD: return 0.20
+            if decision == TriageDecision.ADMIT_ICU: return -0.10
+            return 0.15
 
     def _efficiency_reward(self, decision, severity, needs_icu, resources, notes):
         res = resources
         icu_utilization = res.icu_beds_used / max(res.icu_beds_total, 1)
-
-        # Reward using scarce resources wisely
         if decision == TriageDecision.ADMIT_ICU and not needs_icu:
-            penalty = -0.05 - (0.15 * (1 - severity))  # More penalty for milder patients
+            penalty = -0.05 - (0.15 * (1 - severity))
             notes.append(f"Resource inefficiency: ICU over-use ({penalty:.2f})")
             return penalty
-
         if decision == TriageDecision.ADMIT_ICU and needs_icu:
-            # Bonus for allocating scarce ICU correctly when it's almost full
-            if icu_utilization > 0.85:
-                notes.append("Efficiency bonus: correct scarce ICU use (+0.10)")
-                return 0.10
-            return 0.05
-
-        # Reward for freeing up ICU via stabilize or ward when possible
-        if decision == TriageDecision.STABILIZE and icu_utilization > 0.75:
-            notes.append("Efficiency: stabilize during high ICU load (+0.05)")
-            return 0.05
-
-        return 0.0
+            return 0.10 if icu_utilization > 0.85 else 0.05
+        return 0.05 if (decision == TriageDecision.STABILIZE and icu_utilization > 0.75) else 0.0
 
     def _equity_penalty(self, patient, notes):
-        """Penalize if agent is consistently deferring patients of the same type (age-based)."""
-        if len(self._last_actions) < 3:
-            return 0.0
+        if len(self._last_actions) < 3: return 0.0
         recent_defers = sum(1 for _, d in self._last_actions[-4:] if d == TriageDecision.DEFER)
         if recent_defers >= 3:
             notes.append("Equity: excessive deferral pattern (-0.08)")
@@ -280,11 +214,9 @@ class ClinicalTriageEnvironment:
         return 0.0
 
     def _delay_penalty(self, decision, patient, notes):
-        """Penalize deferring a deteriorating critical patient."""
         if decision == TriageDecision.DEFER:
             severity = patient["_true_severity"]
-            deteriorating = patient.get("deteriorating", False)
-            if severity > 0.80 and deteriorating:
+            if severity > 0.80 and patient.get("deteriorating", False):
                 notes.append("Delay: critical deteriorating patient deferred (-0.10)")
                 return -0.10
             elif severity > 0.60:
@@ -293,30 +225,20 @@ class ClinicalTriageEnvironment:
         return 0.0
 
     def _rationale_quality(self, rationale: str, patient: dict) -> float:
-        """
-        Score rationale for task3 using keyword heuristics.
-        In production would use an LLM judge; here uses deterministic scoring.
-        """
         score = 0.0
         r = rationale.lower()
-        severity = patient["_true_severity"]
-
-        # Basic reasoning present
         clinical_terms = ["vitals", "gcs", "spo2", "bp", "lactate", "sepsis", "critical", "stable",
                           "icu", "vent", "resource", "bed", "deteriorat", "palliative"]
         hits = sum(1 for t in clinical_terms if t in r)
         score += min(0.06, hits * 0.012)
-
-        # Matching the right clinical logic
-        if severity > 0.8 and any(w in r for w in ["critical", "urgent", "immediate"]):
+        if patient["_true_severity"] > 0.8 and any(w in r for w in ["critical", "urgent", "immediate"]):
             score += 0.02
         if patient["_palliative"] and any(w in r for w in ["comfort", "palliative", "dnr", "hospice"]):
             score += 0.02
-
         return round(min(0.10, score), 3)
 
     # ------------------------------------------------------------------ #
-    # Resource management                                                  #
+    # Resource management                                                #
     # ------------------------------------------------------------------ #
 
     def _apply_action_to_resources(self, action: TriageAction, patient: dict):
@@ -327,42 +249,31 @@ class ClinicalTriageEnvironment:
                 r["ventilators_used"] = min(r["ventilators_used"] + 1, r["ventilators_total"])
         elif action.decision == TriageDecision.ADMIT_WARD:
             r["ward_beds_used"] = min(r["ward_beds_used"] + 1, r["ward_beds_total"])
-        # Palliative / discharge / stabilize do not consume persistent resources
 
     def _update_outcome_counters(self, action: TriageAction, patient: dict):
         severity = patient["_true_severity"]
         if action.decision == TriageDecision.ADMIT_ICU:
             self._admitted_icu += 1
-            if severity > 0.8:
-                self._survived += 1
-            else:
-                self._survived += 1
+            self._survived += 1
         elif action.decision == TriageDecision.ADMIT_WARD:
             self._admitted_ward += 1
-            if severity < 0.7:
-                self._survived += 1
-            else:
-                self._deceased += 1  # Serious patient in wrong place
+            if severity < 0.7: self._survived += 1
+            else: self._deceased += 1
         elif action.decision == TriageDecision.DISCHARGE:
             self._discharged += 1
-            if severity > 0.5:
-                self._deceased += 1
-            else:
-                self._survived += 1
+            if severity > 0.5: self._deceased += 1
+            else: self._survived += 1
         elif action.decision == TriageDecision.PALLIATIVE:
-            if patient["_palliative"]:
-                self._survived += 1  # Dignity preserved
-            else:
-                self._deceased += 1
+            if patient["_palliative"]: self._survived += 1
+            else: self._deceased += 1
 
     # ------------------------------------------------------------------ #
-    # Helpers                                                              #
+    # Helpers                                                            #
     # ------------------------------------------------------------------ #
 
     def _reset_internal(self):
         self._episode_id = str(uuid4())
-        queue_raw = generate_patient_queue(self.task_id, seed=self.seed)
-        self._queue = queue_raw
+        self._queue = generate_patient_queue(self.task_id, seed=self.seed)
         self._resources = get_initial_resources(self.task_id)
         self._current_idx = 0
         self._step_count = 0
@@ -418,7 +329,6 @@ class ClinicalTriageEnvironment:
         )
 
     def _dummy_patient(self) -> dict:
-        from models import PatientVitals
         return {
             "patient_id": "NONE",
             "age": 0,
@@ -429,8 +339,3 @@ class ClinicalTriageEnvironment:
             "deteriorating": False,
             "severity_hint": None,
         }
-
-
-# Patch RewardBreakdown to support feedback string transport
-from models import RewardBreakdown as _RB
-_RB._feedback = ""

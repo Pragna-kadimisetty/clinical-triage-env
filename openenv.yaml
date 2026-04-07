@@ -15,21 +15,18 @@ tags:
   - agent-environment
 
 name: clinical-triage-env
-version: 1.0.0
+version: 1.1.0
 description: >
   OpenEnv environment simulating ICU resource allocation under uncertainty.
-  Agents triage patients by severity, allocate scarce hospital resources
-  (ICU beds, ventilators, ward beds), and navigate ethical trade-offs in
-  mass casualty scenarios. Partial observability: true severity is hidden
-  in medium and hard tasks.
+  Agents triage patients by severity and allocate scarce hospital resources.
+  Compliant with the OpenEnv Gymnasium-like interface (obs, reward, done, info).
 
 tasks:
   - id: task1
     name: Single-Resource Triage
     difficulty: easy
     description: >
-      Triage 6 patients with severity hints shown.
-      Resources are adequate. Learn the action space and reward signal.
+      Triage 6 patients with severity hints shown. Adequate resources.
     max_steps: 6
     reward_range: [-0.30, 1.0]
     partial_observability: false
@@ -39,7 +36,6 @@ tasks:
     difficulty: medium
     description: >
       Triage 9 patients without severity hints. Moderate resource scarcity.
-      Includes deceptive presentations (bad vitals, stable patient).
     max_steps: 9
     reward_range: [-0.30, 1.0]
     partial_observability: true
@@ -48,8 +44,7 @@ tasks:
     name: Mass Casualty Surge
     difficulty: hard
     description: >
-      Triage 12 patients during disaster surge. All ICU beds full.
-      No ventilators. Ethical trade-offs mandatory. Rationale scored.
+      Triage 12 patients during surge. Ethical trade-offs mandatory. Rationale scored.
     max_steps: 12
     reward_range: [-0.30, 1.0]
     partial_observability: true
@@ -84,7 +79,7 @@ observation_space:
       history: string
       time_since_arrival_minutes: integer
       deteriorating: boolean
-      severity_hint: string | null  # null in task2/task3
+      severity_hint: string | null
     resource_state:
       icu_beds_total: integer
       icu_beds_used: integer
@@ -98,24 +93,28 @@ observation_space:
     last_step_reward: float
     last_step_feedback: string
     done: boolean
+    info:
+      type: object
+      description: "Contains the 'breakdown' dictionary with detailed reward components."
 
 reward_design:
+  type: dense
   dimensions:
     - name: survival_reward
       weight: 0.50
-      description: Does the decision match the patient's true medical need?
+      description: "Primary score for matching patient need (max +0.50)."
     - name: resource_efficiency
       weight: 0.25
-      description: Are scarce resources allocated to those who need them most?
+      description: "Bonus for correct allocation under high load; penalty for waste."
     - name: equity_penalty
-      weight: 0.00  # max -0.08 per step
-      description: Penalizes systemic deferral patterns
+      weight: -0.08
+      description: "Penalizes excessive deferral patterns."
     - name: delay_penalty
-      weight: 0.00  # max -0.10 per step
-      description: Penalizes deferring deteriorating critical patients
+      weight: -0.10
+      description: "Penalizes deferring critical/deteriorating patients."
     - name: rationale_bonus
-      weight: 0.10  # task3 only
-      description: Rewards coherent clinical reasoning in free-text rationale
+      weight: 0.10
+      description: "Bonus for clinical terminology and logic in Task 3 rationale."
 
 endpoints:
   reset: POST /reset

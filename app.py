@@ -18,8 +18,15 @@ app = FastAPI(
     version="1.0.0",
 )
 
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# Enable CORS for Hugging Face Spaces and external agent access
+app.add_middleware(
+    CORSMiddleware, 
+    allow_origins=["*"], 
+    allow_methods=["*"], 
+    allow_headers=["*"]
+)
 
+# Global environment instance
 _env: Optional[ClinicalTriageEnvironment] = None
 
 
@@ -29,6 +36,7 @@ class ResetRequest(BaseModel):
 
 
 class StepResponse(BaseModel):
+    """Standard OpenEnv step response structure."""
     observation: ClinicalObservation
     reward: float
     done: bool
@@ -42,35 +50,51 @@ def root():
         "env": "ClinicalTriageEnv",
         "version": "1.0.0",
         "tasks": ["task1", "task2", "task3"],
+        "interface": "OpenEnv-Compliant"
     }
 
 
 @app.post("/reset", response_model=ClinicalObservation)
 def reset(req: ResetRequest):
     global _env
+    # Initialize the environment with selected task and seed
     _env = ClinicalTriageEnvironment(task_id=req.task_id, seed=req.seed)
     return _env.reset()
 
 
 @app.post("/step", response_model=StepResponse)
 def step(action: TriageAction):
+    """
+    Executes a step in the environment. 
+    Receives an action and returns the OpenEnv tuple via StepResponse.
+    """
     global _env
     if _env is None:
-        raise HTTPException(400, "Call /reset first.")
+        raise HTTPException(status_code=400, detail="Environment not initialized. Call /reset first.")
+    
+    # Unpack the 4-part tuple returned by ClinicalTriageEnvironment.step()
     obs, reward, done, info = _env.step(action)
-    return StepResponse(observation=obs, reward=reward, done=done, info=info)
+    
+    return StepResponse(
+        observation=obs,
+        reward=reward,
+        done=done,
+        info=info
+    )
 
 
 @app.get("/state", response_model=ClinicalState)
 def state():
+    """Returns the full internal state of the hospital simulation."""
     global _env
     if _env is None:
-        raise HTTPException(400, "Call /reset first.")
+        raise HTTPException(status_code=400, detail="Environment not initialized. Call /reset first.")
     return _env.state
 
 
 @app.get("/tasks")
 def list_tasks():
+    """Provides metadata for the three available triage tasks."""
     return {
         "tasks": [
             {
@@ -105,4 +129,5 @@ def list_tasks():
 
 
 if __name__ == "__main__":
+    # Host on 0.0.0.0 and port 7860 for compatibility with Docker/Hugging Face
     uvicorn.run(app, host="0.0.0.0", port=7860)
