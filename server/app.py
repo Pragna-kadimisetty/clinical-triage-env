@@ -1,22 +1,14 @@
-"""
-FastAPI server for ClinicalTriageEnv.
-"""
-
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List, Dict
+from typing import Optional, Dict
 
-# UPDATED IMPORTS: Pointing to the new package folder
+# UPDATED IMPORTS for the new folder structure
 from clinical_triage.models import TriageAction, ClinicalObservation, ClinicalState
 from clinical_triage.environment import ClinicalTriageEnvironment
 
-app = FastAPI(
-    title="ClinicalTriageEnv",
-    description="OpenEnv-compatible ICU triage environment.",
-    version="1.1.0",
-)
+app = FastAPI(title="ClinicalTriageEnv", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware, 
@@ -39,64 +31,27 @@ class StepResult(BaseModel):
 
 @app.get("/")
 def root():
-    return {
-        "status": "ok",
-        "env": "clinical-triage-env",
-        "version": "1.1.0",
-        "tasks": ["task1", "task2", "task3"]
-    }
+    return {"status": "ok", "interface": "OpenEnv-Compliant"}
 
 @app.post("/reset", response_model=StepResult)
 def reset(req: Optional[ResetRequest] = None):
     global _env
     t_id = getattr(req, "task_id", "task1") if req else "task1"
     s = getattr(req, "seed", 42) if req else 42
-    
     _env = ClinicalTriageEnvironment(task_id=t_id, seed=s)
     obs = _env.reset()
-    
-    return StepResult(
-        observation=obs,
-        reward=0.0,
-        done=False,
-        info={}
-    )
+    return StepResult(observation=obs, reward=0.0, done=False)
 
 @app.post("/step", response_model=StepResult)
 def step(action: TriageAction):
     global _env
     if _env is None:
-        raise HTTPException(status_code=400, detail="Environment not initialized.")
-    
+        raise HTTPException(status_code=400, detail="Init env first")
     obs, reward, done, info = _env.step(action)
-    
-    return StepResult(
-        observation=obs,
-        reward=float(reward),
-        done=bool(done),
-        info=info
-    )
+    return StepResult(observation=obs, reward=float(reward), done=bool(done), info=info)
 
-@app.get("/state", response_model=ClinicalState)
-def state():
-    global _env
-    if _env is None:
-        raise HTTPException(status_code=400, detail="Environment not initialized.")
-    return _env.state
-
-@app.get("/tasks")
-def list_tasks():
-    return {
-        "tasks": [
-            {"id": "task1", "name": "Single-Resource Triage", "difficulty": "easy"},
-            {"id": "task2", "name": "Multi-Resource Triage", "difficulty": "medium"},
-            {"id": "task3", "name": "Mass Casualty Surge", "difficulty": "hard"}
-        ]
-    }
-
-# This main function is what the [project.scripts] calls
+# REQUIRED: The entry point function
 def main():
-    import uvicorn
     uvicorn.run("server.app:app", host="0.0.0.0", port=7860)
 
 if __name__ == "__main__":

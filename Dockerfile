@@ -1,26 +1,22 @@
-[build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build-meta"
+FROM python:3.11-slim
+WORKDIR /app
 
-[project]
-name = "clinical-triage-env"
-version = "1.1.0"
-description = "OpenEnv-compatible ICU triage environment."
-readme = "README.md"
-requires-python = ">=3.10"
-dependencies = [
-    "fastapi==0.111.0",
-    "uvicorn==0.29.0",
-    "pydantic==2.7.0",
-    "openai==1.30.0",
-    "requests==2.31.0",
-    "openenv-core>=0.2.0",
-]
+RUN pip install --no-cache-dir setuptools wheel uv
 
-[project.scripts]
-# This satisfies the "Missing [project.scripts] server entry point" error
-clinical-triage-server = "server.app:main"
+# Copy metadata first
+COPY pyproject.toml uv.lock README.md ./
 
-[tool.setuptools]
-# Tells Python where to find your code
-packages = ["clinical_triage", "server"]
+# Copy the new organized folders
+COPY clinical_triage/ ./clinical_triage/
+COPY server/ ./server/
+
+# Install the project as a package
+RUN pip install --no-cache-dir .
+
+EXPOSE 7860
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7860/')"
+
+# Run using the new entry point script
+CMD ["clinical-triage-server"]
