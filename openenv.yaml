@@ -1,0 +1,124 @@
+---
+title: ClinicalTriageEnv
+emoji: 🏥
+colorFrom: red
+colorTo: blue
+sdk: docker
+pinned: false
+license: apache-2.0
+tags:
+  - openenv
+  - clinical-triage
+  - reinforcement-learning
+  - medical-ai
+  - resource-allocation
+  - agent-environment
+
+name: clinical-triage-env
+version: 1.0.0
+description: >
+  OpenEnv environment simulating ICU resource allocation under uncertainty.
+  Agents triage patients by severity, allocate scarce hospital resources
+  (ICU beds, ventilators, ward beds), and navigate ethical trade-offs in
+  mass casualty scenarios. Partial observability: true severity is hidden
+  in medium and hard tasks.
+
+tasks:
+  - id: task1
+    name: Single-Resource Triage
+    difficulty: easy
+    description: >
+      Triage 6 patients with severity hints shown.
+      Resources are adequate. Learn the action space and reward signal.
+    max_steps: 6
+    reward_range: [-0.30, 1.0]
+    partial_observability: false
+
+  - id: task2
+    name: Multi-Resource Triage Under Pressure
+    difficulty: medium
+    description: >
+      Triage 9 patients without severity hints. Moderate resource scarcity.
+      Includes deceptive presentations (bad vitals, stable patient).
+    max_steps: 9
+    reward_range: [-0.30, 1.0]
+    partial_observability: true
+
+  - id: task3
+    name: Mass Casualty Surge
+    difficulty: hard
+    description: >
+      Triage 12 patients during disaster surge. All ICU beds full.
+      No ventilators. Ethical trade-offs mandatory. Rationale scored.
+    max_steps: 12
+    reward_range: [-0.30, 1.0]
+    partial_observability: true
+
+action_space:
+  type: object
+  fields:
+    patient_id: string
+    decision: enum[admit_icu, admit_ward, stabilize, discharge, palliative, defer]
+    resource_allocation: dict[string, int]
+    rationale: string | null
+    priority_override: int[1,10] | null
+
+observation_space:
+  type: object
+  fields:
+    task_id: string
+    step: integer
+    max_steps: integer
+    current_patient:
+      patient_id: string
+      age: integer
+      chief_complaint: string
+      vitals:
+        heart_rate: integer
+        systolic_bp: integer
+        spo2: float
+        respiratory_rate: integer
+        gcs: integer[3,15]
+        temperature: float
+        lactate: float | null
+      history: string
+      time_since_arrival_minutes: integer
+      deteriorating: boolean
+      severity_hint: string | null  # null in task2/task3
+    resource_state:
+      icu_beds_total: integer
+      icu_beds_used: integer
+      ventilators_total: integer
+      ventilators_used: integer
+      ward_beds_total: integer
+      ward_beds_used: integer
+      specialists_available: integer
+    queue_length: integer
+    episode_reward_so_far: float
+    last_step_reward: float
+    last_step_feedback: string
+    done: boolean
+
+reward_design:
+  dimensions:
+    - name: survival_reward
+      weight: 0.50
+      description: Does the decision match the patient's true medical need?
+    - name: resource_efficiency
+      weight: 0.25
+      description: Are scarce resources allocated to those who need them most?
+    - name: equity_penalty
+      weight: 0.00  # max -0.08 per step
+      description: Penalizes systemic deferral patterns
+    - name: delay_penalty
+      weight: 0.00  # max -0.10 per step
+      description: Penalizes deferring deteriorating critical patients
+    - name: rationale_bonus
+      weight: 0.10  # task3 only
+      description: Rewards coherent clinical reasoning in free-text rationale
+
+endpoints:
+  reset: POST /reset
+  step: POST /step
+  state: GET /state
+  tasks: GET /tasks
