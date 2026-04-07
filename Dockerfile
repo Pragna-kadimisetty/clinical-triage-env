@@ -1,22 +1,20 @@
 FROM python:3.11-slim
 WORKDIR /app
 
+# 1. Install build tools
 RUN pip install --no-cache-dir setuptools wheel uv
 
-# Copy metadata first
+# 2. Copy metadata files
 COPY pyproject.toml uv.lock README.md ./
 
-# Copy the new organized folders
+# 3. Copy your folders
 COPY clinical_triage/ ./clinical_triage/
 COPY server/ ./server/
 
-# Install the project as a package
+# 4. Install everything
 RUN pip install --no-cache-dir .
 
 EXPOSE 7860
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7860/')"
-
-# Run using the new entry point script
+# 5. Run using the command we defined in pyproject.toml
 CMD ["clinical-triage-server"]
