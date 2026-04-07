@@ -5,7 +5,7 @@ Uses OpenAI-compatible client. Runs all 3 tasks end-to-end.
 Required env vars:
   API_BASE_URL  — LLM API endpoint
   MODEL_NAME    — Model identifier
-  HF_TOKEN      — API key
+  HF_TOKEN      — API key (Mandatory)
 
 Optional:
   ENV_URL       — Environment server URL (default: http://localhost:7860)
@@ -16,14 +16,17 @@ import json
 import requests
 from openai import OpenAI
 
+# 1. UPDATED: Environment Variables as per Hackathon Requirements
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
+HF_TOKEN = os.environ.get("HF_TOKEN", "") # Use HF_TOKEN as per rules
 ENV_URL = os.environ.get("ENV_URL", "http://localhost:7860")
+
+if not HF_TOKEN:
+    raise ValueError("HF_TOKEN environment variable is required")
 
 client = OpenAI(api_key=HF_TOKEN, base_url=API_BASE_URL)
 
-# UPDATED: Simplified decisions to prevent 422 errors
 SYSTEM_PROMPT = """You are an experienced emergency physician making rapid triage decisions.
 
 For each patient presented, analyze their vitals and decide:
@@ -71,7 +74,6 @@ def parse_action(raw: str, patient_id: str) -> dict:
         action = json.loads(clean.strip())
         action["patient_id"] = patient_id
         
-        # UPDATED: Matches the valid decisions accepted by the environment
         valid = ["admit_icu", "admit_ward", "discharge"]
         if action.get("decision") not in valid:
             action["decision"] = "admit_ward"
@@ -80,12 +82,11 @@ def parse_action(raw: str, patient_id: str) -> dict:
             action["resource_allocation"] = {}
         return action
     except Exception as e:
-        print(f"    [WARN] JSON parse failed: {e}. Defaulting to admit_ward.")
         return {
             "patient_id": patient_id,
             "decision": "admit_ward",
             "resource_allocation": {},
-            "rationale": "Parse error — defaulting to ward",
+            "rationale": f"Parse error: {e}",
             "priority_override": None,
         }
 
@@ -115,8 +116,7 @@ def format_patient_prompt(obs: dict, task_id: str) -> str:
     lines += [
         f"",
         f"RESOURCES:",
-        f"   ICU beds: {r['icu_beds_used']}/{r['icu_beds_total']} used | Ventilators: {r['ventilators_used']}/{r['ventilators_total']} used",
-        f"   Ward beds: {r['ward_beds_used']}/{r['ward_beds_total']} used | Specialists: {r['specialists_available']} available",
+        f"   ICU beds: {r['icu_beds_used']}/{r['icu_beds_total']} used | Ward beds: {r['ward_beds_used']}/{r['ward_beds_total']} used",
         f"",
         f"Cumulative reward so far: {obs['episode_reward_so_far']:.3f}",
         f"Last feedback: {obs['last_step_feedback'][:120]}",
@@ -125,69 +125,57 @@ def format_patient_prompt(obs: dict, task_id: str) -> str:
     ]
     return "\n".join(lines)
 
-def run_task(task_id: str) -> float:
-    print(f"\n{'='*55}")
-    print(f"   TASK: {task_id.upper()}")
-    print("=" * 55)
+def run_task(task_id: str):
+    # 2. UPDATED: Start Log
+    print(f"[START] task={task_id} env=clinical-triage-env model={MODEL_NAME}")
 
-    resp = requests.post(f"{ENV_URL}/reset", json={"task_id": task_id, "seed": 42})
-    resp.raise_for_status()
-    obs = resp.json()
+    try:
+        resp = requests.post(f"{ENV_URL}/reset", json={"task_id": task_id, "seed": 42})
+        resp.raise_for_status()
+        obs = resp.json()
 
-    total_reward = 0.0
-    step = 0
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        rewards_list = []
+        step_count = 0
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    while not obs.get("done", False):
-        patient_id = obs["current_patient"]["patient_id"]
-        user_msg = format_patient_prompt(obs, task_id)
-        messages.append({"role": "user", "content": user_msg})
+        while not obs.get("done", False):
+            step_count += 1
+            patient_id = obs["current_patient"]["patient_id"]
+            user_msg = format_patient_prompt(obs, task_id)
+            messages.append({"role": "user", "content": user_msg})
 
-        raw = call_llm(messages)
-        messages.append({"role": "assistant", "content": raw})
+            raw = call_llm(messages)
+            messages.append({"role": "assistant", "content": raw})
 
-        action = parse_action(raw, patient_id)
+            action = parse_action(raw, patient_id)
 
-        print(f"\n   Step {step+1}: [{patient_id}] {obs['current_patient']['chief_complaint'][:50]}")
-        print(f"    Decision: {action['decision']} | Rationale: {action.get('rationale','')[:80]}")
+            step_resp = requests.post(f"{ENV_URL}/step", json=action)
+            step_resp.raise_for_status()
+            data = step_resp.json()
 
-        step_resp = requests.post(f"{ENV_URL}/step", json=action)
-        step_resp.raise_for_status()
-        data = step_resp.json()
+            reward = data["reward"]
+            done = data["done"]
+            obs = data["observation"]
+            
+            rewards_list.append(reward)
 
-        reward = data["reward"]
-        total_reward += reward
-        obs = data["observation"]
+            # 3. UPDATED: Step Log (Lowercase booleans, 2 decimal rewards)
+            reward_val = f"{reward:.2f}"
+            done_val = str(done).lower() 
+            print(f"[STEP] step={step_count} action={action['decision']} reward={reward_val} done={done_val} error=null")
 
-        print(f"    Reward: {reward:+.3f} | {obs['last_step_feedback'][:100]}")
-        step += 1
+        # 4. UPDATED: End Log
+        success_val = "true" if (sum(rewards_list)/max(len(rewards_list), 1)) > 0.6 else "false"
+        rewards_str = ",".join([f"{r:.2f}" for r in rewards_list])
+        print(f"[END] success={success_val} steps={step_count} rewards={rewards_str}")
 
-    avg = total_reward / max(step, 1)
-    print(f"\n   {task_id} → avg score: {avg:.3f} over {step} patients (total: {total_reward:.3f})")
-    return avg
+    except Exception as e:
+        # Fallback end log if something crashes
+        print(f"[END] success=false steps=0 rewards=0.00 error={str(e)}")
 
 def main():
-    print("\n🏥 ClinicalTriageEnv — Baseline Inference")
-    print(f"   Model:  {MODEL_NAME}")
-    print(f"   API:    {API_BASE_URL}")
-    print(f"   Server: {ENV_URL}\n")
-
-    scores = {}
     for task in ["task1", "task2", "task3"]:
-        try:
-            scores[task] = run_task(task)
-        except Exception as e:
-            print(f"\n[ERROR] {task}: {e}")
-            scores[task] = 0.0
-
-    diff = {"task1": "Easy", "task2": "Medium", "task3": "Hard"}
-    print("\n" + "=" * 55)
-    print("   FINAL BASELINE SCORES")
-    print("=" * 55)
-    for t, s in scores.items():
-        print(f"  {t} ({diff[t]:6s}): {s:.3f}")
-    print(f"  Average:        {sum(scores.values())/3:.3f}")
-    print("=" * 55)
+        run_task(task)
 
 if __name__ == "__main__":
     main()

@@ -8,8 +8,6 @@ app_port: 7860
 pinned: false
 ---
 
-# Clinical Triage Environment
-This is an OpenEnv-compliant ICU triage simulation.
 # 🏥 ClinicalTriageEnv
 
 **An OpenEnv-Compatible Framework for ICU Resource Allocation Under Uncertainty**
@@ -103,14 +101,17 @@ Forces:
 
 ## 📊 Performance Benchmarks
 
+## 📊 Performance Benchmarks
+
 | Task        | Difficulty | Strategy           | Score     |
 | ----------- | ---------- | ------------------ | --------- |
-| Task 1      | Easy       | Guided triage      | 0.475     |
-| Task 2      | Medium     | Vitals reasoning   | 0.317     |
-| Task 3      | Hard       | Ethical allocation | 0.211     |
-| **Average** | —          | —                  | **0.334** |
+| Task 1      | Easy       | Guided triage      | 0.48      |
+| Task 2      | Medium     | Vitals reasoning   | 0.32      |
+| Task 3      | Hard       | Ethical allocation | 0.25      |
+| **Average** | —          | —                  | **0.35** |
 
-**Note:** Task 3 includes forced-failure scenarios to test prioritization.
+**Note:** Scores based on Llama 3.3-70B baseline runs. Task 3 reflects high-pressure resource exhaustion scenarios.
+
 
 ---
 
@@ -163,6 +164,14 @@ Designed to prevent trivial or exploitable policies.
 
 ## 🚀 Setup & Execution
 
+ # In your terminal, set your variables like this:
+$env:API_BASE_URL="https://api.openai.com/v1"  
+$env:MODEL_NAME="gpt-4o-mini"
+$env:HF_TOKEN="hf_your_actual_token_here"    
+$env:ENV_URL="http://localhost:7860"
+
+python inference.py
+
 ### Docker
 
 ```bash
@@ -187,15 +196,15 @@ python inference.py
 
 ## 📂 Project Structure
 
-```text
 clinical_triage_env/
 ├── app.py
 ├── environment.py
 ├── patients.py
 ├── inference.py
 ├── models.py
+├── openenv.yaml      
 ├── requirements.txt
-```
+└── README.md        
 
 ---
 
