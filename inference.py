@@ -23,20 +23,15 @@ ENV_URL = os.environ.get("ENV_URL", "http://localhost:7860")
 
 client = OpenAI(api_key=HF_TOKEN, base_url=API_BASE_URL)
 
-SYSTEM_PROMPT = """You are an experienced emergency physician and intensivist making rapid triage decisions in a busy hospital.
+# UPDATED: Simplified decisions to prevent 422 errors
+SYSTEM_PROMPT = """You are an experienced emergency physician making rapid triage decisions.
 
-For each patient presented, analyze their vitals, history, and clinical presentation, then decide:
+For each patient presented, analyze their vitals and decide:
 
 DECISIONS (pick exactly one):
-- admit_icu      → Admit to ICU (use when: critical vitals, immediate life threat, needs intensive monitoring)
-- admit_ward     → Admit to general ward (use when: serious but stable, needs monitoring not ICU)
-- stabilize      → Stabilize and reassess (use when: improving or resources full, can wait safely)
-- discharge      → Discharge home (use when: mild, not at risk)
-- palliative     → Comfort care only (use when: terminal illness, intervention futile/against wishes)
-- defer          → Defer decision (use RARELY — only if genuinely need more info)
-
-RESOURCES to track: icu_beds_used/total, ventilators_used/total, ward_beds_used/total.
-ICU full → cannot admit unless you defer someone else.
+- admit_icu
+- admit_ward
+- discharge
 
 Always respond with valid JSON:
 {
@@ -50,11 +45,10 @@ Always respond with valid JSON:
 CRITICAL rules:
 - NEVER discharge a patient with GCS < 12, SpO2 < 88%, or systolic BP < 90
 - Always consider the severity_hint if provided
-- If ICU beds are 0 remaining, use stabilize or ward instead
-- Palliative patients should NOT get ICU (it prolongs suffering, wastes resources)
+- If ICU beds are 0 remaining, use ward instead
 - Justify every decision with clinical data from the vitals
+- Do not add any text before or after the JSON.
 """
-
 
 def call_llm(messages: list) -> str:
     response = client.chat.completions.create(
@@ -65,31 +59,35 @@ def call_llm(messages: list) -> str:
     )
     return response.choices[0].message.content.strip()
 
-
 def parse_action(raw: str, patient_id: str) -> dict:
     try:
         clean = raw.strip()
         if clean.startswith("```"):
             clean = "\n".join(clean.split("\n")[1:])
             clean = clean.replace("```", "")
+        if clean.startswith("json"):
+            clean = clean[4:].strip()
+            
         action = json.loads(clean.strip())
         action["patient_id"] = patient_id
-        valid = ["admit_icu", "admit_ward", "stabilize", "discharge", "palliative", "defer"]
+        
+        # UPDATED: Matches the valid decisions accepted by the environment
+        valid = ["admit_icu", "admit_ward", "discharge"]
         if action.get("decision") not in valid:
-            action["decision"] = "stabilize"
+            action["decision"] = "admit_ward"
+            
         if not isinstance(action.get("resource_allocation"), dict):
             action["resource_allocation"] = {}
         return action
     except Exception as e:
-        print(f"    [WARN] JSON parse failed: {e}. Defaulting to stabilize.")
+        print(f"    [WARN] JSON parse failed: {e}. Defaulting to admit_ward.")
         return {
             "patient_id": patient_id,
-            "decision": "stabilize",
+            "decision": "admit_ward",
             "resource_allocation": {},
-            "rationale": "Parse error — defaulting to stabilize",
+            "rationale": "Parse error — defaulting to ward",
             "priority_override": None,
         }
-
 
 def format_patient_prompt(obs: dict, task_id: str) -> str:
     p = obs["current_patient"]
@@ -104,21 +102,21 @@ def format_patient_prompt(obs: dict, task_id: str) -> str:
         f"History: {p['history']}",
         f"",
         f"VITALS:",
-        f"  HR: {v['heart_rate']} bpm | BP: {v['systolic_bp']} mmHg | SpO2: {v['spo2']}%",
-        f"  RR: {v['respiratory_rate']} /min | GCS: {v['gcs']}/15 | Temp: {v['temperature']}°C",
+        f"   HR: {v['heart_rate']} bpm | BP: {v['systolic_bp']} mmHg | SpO2: {v['spo2']}%",
+        f"   RR: {v['respiratory_rate']} /min | GCS: {v['gcs']}/15 | Temp: {v['temperature']}°C",
     ]
     if v.get("lactate"):
-        lines.append(f"  Lactate: {v['lactate']} mmol/L")
+        lines.append(f"   Lactate: {v['lactate']} mmol/L")
     if p.get("severity_hint"):
-        lines.append(f"  Severity hint: {p['severity_hint']}")
+        lines.append(f"   Severity hint: {p['severity_hint']}")
     if p.get("deteriorating"):
-        lines.append(f"  *** DETERIORATING — vitals worsening ***")
+        lines.append(f"   *** DETERIORATING — vitals worsening ***")
 
     lines += [
         f"",
         f"RESOURCES:",
-        f"  ICU beds: {r['icu_beds_used']}/{r['icu_beds_total']} used | Ventilators: {r['ventilators_used']}/{r['ventilators_total']} used",
-        f"  Ward beds: {r['ward_beds_used']}/{r['ward_beds_total']} used | Specialists: {r['specialists_available']} available",
+        f"   ICU beds: {r['icu_beds_used']}/{r['icu_beds_total']} used | Ventilators: {r['ventilators_used']}/{r['ventilators_total']} used",
+        f"   Ward beds: {r['ward_beds_used']}/{r['ward_beds_total']} used | Specialists: {r['specialists_available']} available",
         f"",
         f"Cumulative reward so far: {obs['episode_reward_so_far']:.3f}",
         f"Last feedback: {obs['last_step_feedback'][:120]}",
@@ -127,10 +125,9 @@ def format_patient_prompt(obs: dict, task_id: str) -> str:
     ]
     return "\n".join(lines)
 
-
 def run_task(task_id: str) -> float:
     print(f"\n{'='*55}")
-    print(f"  TASK: {task_id.upper()}")
+    print(f"   TASK: {task_id.upper()}")
     print("=" * 55)
 
     resp = requests.post(f"{ENV_URL}/reset", json={"task_id": task_id, "seed": 42})
@@ -151,7 +148,7 @@ def run_task(task_id: str) -> float:
 
         action = parse_action(raw, patient_id)
 
-        print(f"\n  Step {step+1}: [{patient_id}] {obs['current_patient']['chief_complaint'][:50]}")
+        print(f"\n   Step {step+1}: [{patient_id}] {obs['current_patient']['chief_complaint'][:50]}")
         print(f"    Decision: {action['decision']} | Rationale: {action.get('rationale','')[:80]}")
 
         step_resp = requests.post(f"{ENV_URL}/step", json=action)
@@ -166,9 +163,8 @@ def run_task(task_id: str) -> float:
         step += 1
 
     avg = total_reward / max(step, 1)
-    print(f"\n  {task_id} → avg score: {avg:.3f} over {step} patients (total: {total_reward:.3f})")
+    print(f"\n   {task_id} → avg score: {avg:.3f} over {step} patients (total: {total_reward:.3f})")
     return avg
-
 
 def main():
     print("\n🏥 ClinicalTriageEnv — Baseline Inference")
@@ -186,13 +182,12 @@ def main():
 
     diff = {"task1": "Easy", "task2": "Medium", "task3": "Hard"}
     print("\n" + "=" * 55)
-    print("  FINAL BASELINE SCORES")
+    print("   FINAL BASELINE SCORES")
     print("=" * 55)
     for t, s in scores.items():
         print(f"  {t} ({diff[t]:6s}): {s:.3f}")
     print(f"  Average:        {sum(scores.values())/3:.3f}")
     print("=" * 55)
-
 
 if __name__ == "__main__":
     main()
