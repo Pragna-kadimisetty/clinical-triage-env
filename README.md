@@ -1,3 +1,15 @@
+---
+title: ClinicalTriageEnv
+emoji: 🏥
+colorFrom: red
+colorTo: blue
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
+# Clinical Triage Environment
+This is an OpenEnv-compliant ICU triage simulation.
 # 🏥 ClinicalTriageEnv
 
 **An OpenEnv-Compatible Framework for ICU Resource Allocation Under Uncertainty**
